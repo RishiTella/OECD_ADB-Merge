@@ -1,0 +1,367 @@
+
+
+library(dplyr)
+
+#New dataset with singular IDs - we just hold on to this
+singularIDs <- all_adb %>%
+  group_by(`ID`) %>%
+  filter(n() == 1) %>%
+  ungroup()
+
+
+#New Dataset with repeat IDS
+repeat_IDs <- all_adb %>%
+  group_by(`ID`) %>%
+  filter(n() > 1) %>%
+  ungroup()
+"
+diff_proj_url_same_ID <- all_adb %>%
+  group_by(`Loan/Grant/Investment/Approval Number`) %>%
+  filter(n_distinct(`Project URL`) > 1) %>%
+  ungroup()
+"
+
+#Preps Multiple entries for the new columns
+#combine all rows in multiple entries that share the same Loan/Grant/Investment/Approval Number, and Project URL and Fund Source
+#Earliest date is taken, Finance variables are summed, Sector or other sector are kept if they match - NA if they dont
+combined_repeat_IDs <- repeat_IDs %>%
+  group_by(`ID`, `Fund Source`, `Project URL`) %>%
+  summarise(
+    `Country Code` = paste(unique(`Country Code`), collapse = "; "),
+    `Date` = min(`Date`, na.rm = TRUE),
+    `Project Financing Amount ($ million)` = sum(`Project Financing Amount ($ million)`, na.rm = TRUE),
+    `New Amount ($ million)` = sum(`New Amount ($ million)`, na.rm = TRUE),
+    `Mitigation Finance ($ million)` = sum(`Mitigation Finance ($ million)`, na.rm = TRUE),
+    `Adaptation Finance ($ million)` = sum(`Adaptation Finance ($ million)`, na.rm = TRUE),
+    
+    `Sector` = {
+      vals <- unique(`Sector`[!is.na(`Sector`)])
+      if (length(vals) == 0) NA_character_ else paste(vals, collapse = "; ")
+    },
+    `Primary Sector` = {
+      vals <- unique(`Primary Sector`[!is.na(`Primary Sector`)])
+      if (length(vals) == 0) NA_character_ else paste(vals, collapse = "; ")
+    },
+    `Other Sector(s) Covered` = {
+      vals <- unique(`Other Sector(s) Covered`[!is.na(`Other Sector(s) Covered`)])
+      if (length(vals) == 0) NA_character_ else paste(vals, collapse = "; ")
+    },
+    
+    across(
+      .cols = -c(
+        `Date`, `Project Financing Amount ($ million)`, `New Amount ($ million)`,
+        `Mitigation Finance ($ million)`, `Adaptation Finance ($ million)`,
+        `Sector`, `Primary Sector`, `Other Sector(s) Covered`
+      ),
+      .fns = ~ first(.x),
+      .names = "{.col}"
+    ),
+    .groups = "drop"
+  )
+
+
+rm(repeat_IDs)
+
+#Entries with only a single fund that do not need additional columns
+single_fund <- combined_repeat_IDs %>%
+  add_count(`ID`, `Project URL`) %>%
+  filter(n == 1) %>%
+  select(-n)
+
+
+#Entries with multiple fund sources that do need to be worked on
+multiple_fund <- combined_repeat_IDs %>%
+  add_count(`ID`, `Project URL`) %>%
+  filter(n > 1) %>%
+  select(-n)
+
+
+rm(combined_repeat_IDs)
+
+
+#Adds new columns
+library(dplyr)
+library(tidyr)
+library(stringr)
+
+# Ensure Date is in date format
+multiple_fund <- multiple_fund %>%
+  mutate(Date = as.Date(Date))
+
+# Fund-level variables to reshape
+pivot_vars <- c(
+  "Fund Source", "Date", "New Amount ($ million)",
+  "Mitigation Finance ($ million)", "Adaptation Finance ($ million)",
+  "Mode of Financial Assistance", "Project Financing Type", "Climate Change Response", "Category Type (Sovereign/Nonsovereign Financing)", "Climate Change Impact on the Project"
+)
+
+# Step 1: Assign fund index within each loan ID
+multiple_fund_long <- multiple_fund %>%
+  arrange(`ID`, Date) %>%
+  group_by(`ID`) %>%
+  mutate(fund_index = row_number()) %>%
+  ungroup()
+
+# Step 2: Pivot wider
+funds_wide <- multiple_fund_long %>%
+  select(`ID`, fund_index, all_of(pivot_vars)) %>%
+  pivot_wider(
+    names_from = fund_index,
+    names_sep = "",
+    values_from = all_of(pivot_vars)
+  )
+
+# Step 3: Compute project-level variables with de-duplicated sector entries
+project_base <- multiple_fund_long %>%
+  group_by(`ID`) %>%
+  summarise(
+    `Sum Project Financing Amount ($ million)` = sum(`Project Financing Amount ($ million)`, na.rm = TRUE),
+    `Sector` = {
+      vals <- unique(trimws(unlist(str_split(na.omit(Sector), ";"))))
+      if (length(vals) == 0) NA_character_ else paste(sort(vals), collapse = "; ")
+    },
+    `Primary Sector` = {
+      vals <- unique(trimws(unlist(str_split(na.omit(`Primary Sector`), ";"))))
+      if (length(vals) == 0) NA_character_ else paste(sort(vals), collapse = "; ")
+    },
+    `Other Sector(s) Covered` = {
+      vals <- unique(trimws(unlist(str_split(na.omit(`Other Sector(s) Covered`), ";"))))
+      if (length(vals) == 0) NA_character_ else paste(sort(vals), collapse = "; ")
+    },
+    .groups = "drop"
+  )
+
+
+# Step 4: Extract first-entry values from earliest-dated project, minus sector info to avoid collision
+first_entries <- multiple_fund_long %>%
+  group_by(`ID`) %>%
+  arrange(Date) %>%
+  slice(1) %>%
+  ungroup() %>%
+  select(-c(all_of(pivot_vars), `Project Financing Amount ($ million)`, Sector, `Primary Sector`, `Other Sector(s) Covered`))
+
+# Step 5: Combine all
+final_combined <- first_entries %>%
+  left_join(project_base, by = "ID") %>%
+  left_join(funds_wide, by = "ID")
+
+# Step 6: Reorder fund columns for readability
+# Generate full desired fund column order
+fund_column_order <- unlist(lapply(1:9, function(i) {
+  paste0(c(
+    "Fund Source", "Date", "New Amount ($ million)",
+    "Mitigation Finance ($ million)", "Adaptation Finance ($ million)",
+    "Mode of Financial Assistance", "Project Financing Type", "Climate Change Response", "Category Type (Sovereign/Nonsovereign Financing)", "Climate Change Impact on the Project"
+  ), i)
+}))
+
+# Final column order
+other_cols <- setdiff(names(final_combined), fund_column_order)
+final_combined <- final_combined %>%
+  select(all_of(other_cols), all_of(fund_column_order))
+
+final_combined <- final_combined %>%
+  select(-fund_index)
+
+final_multiple_fund_combined<- final_combined
+
+rm(final_combined)
+rm(multiple_fund)
+rm(project_base)
+rm(multiple_fund_long)
+rm(funds_wide)
+rm(first_entries)
+
+#Add together other dfs first
+#make sure columns are in the same order
+singularIDs <- singularIDs %>% select(all_of(names(single_fund)))
+
+#add them together
+non_multiple <- bind_rows(single_fund, singularIDs)
+
+rm(singularIDs)
+rm(single_fund)
+
+#Renames non multiple columns
+names(non_multiple)[names(non_multiple) == "Fund Source"] <- "Fund Source1"
+names(non_multiple)[names(non_multiple) == "Date"] <- "Date1"
+names(non_multiple)[names(non_multiple) == "Project Financing Amount ($ million)"] <- "Sum Project Financing Amount ($ million)"
+names(non_multiple)[names(non_multiple) == "New Amount ($ million)"] <- "New Amount ($ million)1"
+names(non_multiple)[names(non_multiple) == "Mitigation Finance ($ million)"] <- "Mitigation Finance ($ million)1"
+names(non_multiple)[names(non_multiple) == "Adaptation Finance ($ million)"] <- "Adaptation Finance ($ million)1"
+names(non_multiple)[names(non_multiple) == "Mode of Financial Assistance"] <- "Mode of Financial Assistance1"
+names(non_multiple)[names(non_multiple) == "Project Financing Type"] <- "Project Financing Type1"
+names(non_multiple)[names(non_multiple) == "Climate Change Response"] <- "Climate Change Response1"
+
+#Adds the missing columns as NA
+missing_cols <- setdiff(names(final_multiple_fund_combined), names(non_multiple))
+
+for (col in missing_cols) {
+  non_multiple[[col]] <- NA
+}
+#Put them in the same order
+non_multiple <- non_multiple[names(final_multiple_fund_combined)]
+
+#Now bind them together
+full_adb <- rbind(final_multiple_fund_combined, non_multiple)
+
+rm(non_multiple)
+rm(final_multiple_fund_combined)
+
+##Adding multiple loan ID columns
+library(dplyr)
+library(tidyr)
+
+full_adb <- full_adb %>%
+  separate(`ID`,
+           into = c("ID1",
+                    "ID2",
+                    "ID3"),
+           sep = "/", fill = "right", extra = "drop")
+
+
+###Splits countries into country columns and removed REG
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(countrycode)
+
+# Clean, normalize, detect/remove "REG", and split the entries
+# Keeps most as is - anything thats a country not a code turns into ISO3
+full_adb <- full_adb %>%
+  mutate(`Country Code` = as.character(`Country Code`)) %>%
+  mutate(
+    Regional = str_detect(`Country Code`, "\\bREG\\b"),  # TRUE if REG is present
+    `Country Code` = `Country Code` %>%
+      str_replace_all("[\\n\\r]", " ") %>%           # Remove line breaks
+      str_replace_all("[,()]", ";") %>%              # Replace commas/parens with semicolon
+      str_replace_all("\\bREG\\b", "") %>%           # Remove REG outright
+      str_replace_all("\\s*;\\s*", ";") %>%          # Normalize spacing around semicolons
+      str_replace_all(";{2,}", ";") %>%              # Collapse multiple semicolons
+      str_remove_all("^;|;$") %>%                    # Strip leading/trailing semicolon
+      str_trim()
+  ) %>%
+  separate(`Country Code`, into = paste0("country", 1:22), sep = ";", fill = "right") %>%
+  mutate(across(starts_with("country"), trimws)) %>%
+  mutate(across(
+    starts_with("country"),
+    ~ if_else(
+      grepl("^[A-Z]{3}$", .x),
+      .x,
+      countrycode(.x, origin = "country.name", destination = "iso3c")
+    )
+  ))
+
+library(purrr)
+
+# Changes the non-ISO3 codes to ISO3 codes so they can be used to match with the OECD
+manual_map <- c(
+  "BAN" = "BGD",
+  "BHU" = "BTN",
+  "BRU" = "BRN",
+  "CAM" = "KHM",
+  "COO" = "COK",
+  "FIJ" = "FJI",
+  "INO" = "IDN",
+  "MAL" = "MYS",
+  "MLD" = "MDV",
+  "MON" = "MNG",
+  "MYA" = "MMR",
+  "NAU" = "NRU",
+  "NEP" = "NPL",
+  "PAL" = "PLW",
+  "PHI" = "PHL",
+  "PRC" = "CHN",
+  "RMI" = "MHL",
+  "SAM" = "WSM",
+  "SIN" = "SGP",
+  "SOL" = "SLB",
+  "SRI" = "LKA",
+  "TAJ" = "TJK",
+  "TIM" = "TLS",
+  "VAN" = "VUT",
+  "VIE" = "VNM"
+)
+
+# List of country columns
+country_cols <- paste0("country", 1:22)
+
+# Change the ones which are not in ISO3
+full_adb <- full_adb %>%
+  mutate(across(
+    all_of(country_cols),
+    ~ recode(.x, !!!manual_map)
+  ))
+
+#seperates the sectors into multiple columns - need to check for unique first
+
+#Remove duplicates 
+full_adb <- full_adb %>%
+  mutate(
+    `Sector` = case_when(
+      is.na(Sector) ~ NA_character_,
+      TRUE ~ sapply(str_split(Sector, ";"), function(x) {
+        paste(sort(unique(trimws(x))), collapse = "; ")
+      })
+    ),
+    `Primary Sector` = case_when(
+      is.na(`Primary Sector`) ~ NA_character_,
+      TRUE ~ sapply(str_split(`Primary Sector`, ";"), function(x) {
+        paste(sort(unique(trimws(x))), collapse = "; ")
+      })
+    ),
+    `Other Sector(s) Covered` = case_when(
+      is.na(`Other Sector(s) Covered`) ~ NA_character_,
+      TRUE ~ sapply(str_split(`Other Sector(s) Covered`, ";"), function(x) {
+        paste(sort(unique(trimws(x))), collapse = "; ")
+      })
+    )
+  )
+
+library(tidyr)
+
+full_adb <- full_adb %>%
+  separate_wider_delim(
+    `Primary Sector`,
+    delim = ";",
+    names_sep = "",
+    too_few = "align_start",
+    cols_remove = TRUE,
+    names = paste0("", 1:6)  
+  ) %>%
+  separate_wider_delim(
+    Sector,
+    delim = ";",
+    names_sep = "",
+    too_few = "align_start",
+    cols_remove = TRUE,
+    names = paste0("", 1:10)
+  ) %>%
+  separate_wider_delim(
+    `Other Sector(s) Covered`,
+    delim = ";",
+    names_sep = "",
+    too_few = "align_start",
+    cols_remove = TRUE,
+    names = paste0("", 1:8)
+  )
+
+
+full_adb <- full_adb %>%
+  rename(Department_Old = Department)
+full_adb <- full_adb %>%
+  rename(`Operations Division_Old` = `Operations Division`)
+full_adb <- full_adb %>%
+  rename(`Loan/Grant/Investment/Approval Number_Old` = `Loan/Grant/Investment/Approval Number`)
+full_adb <- full_adb %>%
+  rename(`Type of Financing_Old` = `Type of Financing`)
+full_adb <- full_adb %>%
+  rename(`Date Approved_Old` = `Date Approved`)
+full_adb <- full_adb %>%
+  rename(`Date Signed_Old` = `Date Signed`)
+full_adb <- full_adb %>%
+  rename(`Signed amount ($ million)_Old` = `Signed amount ($ million)`)
+full_adb <- full_adb %>%
+  rename(`Developing Member Country_Old` = `Developing Member Country`)
+full_adb <- full_adb %>%
+  rename(`Amount ($ million)_Old` = `Amount ($ million)`)
