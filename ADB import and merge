@@ -1,0 +1,117 @@
+
+#2016
+library(readxl)
+'adb_2016' <- read_excel("~/Downloads/climate-financing-2016.xlsx")
+
+#2017
+library(readxl)
+'adb_2017' <- read_excel("~/Downloads/climate-financing-2017.xlsx")
+
+#2018
+library(readxl)
+'adb_2018' <- read_excel("~/Downloads/climate-change-financing-projects-2018.xlsx")
+
+#2019
+library(readxl)
+'adb_2019' <- read_excel("~/Downloads/ADB Climate Change Financing - 2019.xlsx", 
+                                                sheet = "Investments,TAs,Others")
+
+#2020
+library(readxl)
+'adb_2020' <- read_excel("~/Downloads/adb 2020 commitments.xlsx")
+
+#2021
+library(readxl)
+'adb_2021' <- read_excel("~/Downloads/adb 2021 commitments.xlsx")
+
+#2022
+library(readxl)
+'adb_2022' <- read_excel("~/Downloads/adb 2022 commitments.xlsx")
+
+#2023
+library(readxl)
+'adb_2023' <- read_excel("~/Downloads/adb 2023 commitments.xlsx")
+
+#fixing names
+adb_2016 <- adb_2016 %>%
+  mutate(Date = `Date Approved`)
+adb_2017 <- adb_2017 %>%
+  mutate(Date = `Date Approved`)
+adb_2018 <- adb_2018 %>%
+  mutate(Date = `Date Approved`)
+adb_2019 <- adb_2019 %>%
+  mutate(Date = `Date Approved`)
+
+adb_2020 <- adb_2020 %>%
+  mutate(Date = `Date Signed`)
+adb_2021 <- adb_2021 %>%
+  mutate(Date = `Date Signed`)
+adb_2022 <- adb_2022 %>%
+  mutate(Date = `Date Signed`)
+adb_2023 <- adb_2023 %>%
+  mutate(Date = `Date Signed`)
+
+
+adb_2016 <- adb_2016 %>%
+  mutate(`New Amount ($ million)` = `Amount ($ million)`)
+adb_2017 <- adb_2017 %>%
+  mutate(`New Amount ($ million)` = `Amount ($ million)`)
+adb_2018 <- adb_2018 %>%
+  mutate(`New Amount ($ million)` = `Amount ($ million)`)
+adb_2019 <- adb_2019 %>%
+  mutate(`New Amount ($ million)` = `Amount ($ million)`)
+
+adb_2020 <- adb_2020 %>%
+  mutate(`New Amount ($ million)` = `Signed amount ($ million)`)
+adb_2021 <- adb_2021 %>%
+  mutate(`New Amount ($ million)` = `Signed amount ($ million)`)
+adb_2022 <- adb_2022 %>%
+  mutate(`New Amount ($ million)` = `Signed amount ($ million)`)
+adb_2023 <- adb_2023 %>%
+  mutate(`New Amount ($ million)` = `Signed amount ($ million)`)
+
+
+
+#adds other sectors to 2022 abd 2023
+adb_2022 <- adb_2022 %>%
+  mutate(`Other Sector(s) Covered` = NA)
+adb_2023 <- adb_2023 %>%
+  mutate(`Other Sector(s) Covered` = NA)
+
+#and Sector to 2016 and 2017
+adb_2016 <- adb_2016 %>%
+  mutate(`Sector` = NA)
+adb_2017 <- adb_2017 %>%
+  mutate(`Sector` = NA)
+
+#removes the ... columns in 2023
+adb_2023 <- adb_2023 %>%
+  select(-...26, -...27,-...28,-...29)
+
+#2021 Amount needs to be turned into a number from a character - ID 200 - timor leste had a TBD
+adb_2021$`Signed amount ($ million)`[adb_2021$`Signed amount ($ million)` == "TBD"] <- NA
+adb_2021$`Signed amount ($ million)` <- as.numeric(adb_2021$`Signed amount ($ million)`)
+
+adb_2021$`New Amount ($ million)`[adb_2021$`New Amount ($ million)` == "TBD"] <- NA
+adb_2021$`New Amount ($ million)` <- as.numeric(adb_2021$`New Amount ($ million)`)
+
+#Combine them
+all_adb <- bind_rows(adb_2016, adb_2017, adb_2018, adb_2019, adb_2020, adb_2021, adb_2022, adb_2023)
+
+#Removes leading zeroes on Loan Grant Approval Investment mnumber
+all_adb <- all_adb %>%
+  mutate(ID = sub("^0+", "", `Loan/Grant/Investment/Approval Number`))
+
+
+rm(adb_2023)
+rm(adb_2022)
+rm(adb_2021)
+rm(adb_2020)
+rm(adb_2019)
+rm(adb_2018)
+rm(adb_2017)
+rm(adb_2016)
+
+
+
+
